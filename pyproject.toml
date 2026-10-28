@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codingshield"
+version = "0.1.0"
+description = "Защита coding-агентов от опасных команд"
+requires-python = ">=3.9"
+dependencies = [
+    "requests>=2.31.0",
+    "pyyaml>=6.0",
+]
+
+# Вот эта строчка скажет Python: "Возьми файл main.py из этой папки и сделай из него команду codingshield"
+[project.scripts]
+codingshield = "main:main"
+
+# А это скажет: "Включи в пакет все python-файлы и yaml, которые лежат здесь"
+[tool.setuptools]
+py-modules = ["main", "shield_api"]
+include-package-data = true
+
+[tool.setuptools.data-files]
+"." = ["policy.yaml"]

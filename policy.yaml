@@ -1,0 +1,128 @@
+# =============================================================================
+#  Кодинг-Щит — локальная политика безопасности (MVP)
+# =============================================================================
+#  Правила проверяются регулярным выражением (re.search).
+#  Итоговое действие выбирается по МАКСИМАЛЬНОЙ критичности среди сработавших
+#  правил:  ALLOW < ASK < BLOCK.
+#
+#  ВАЖНО: правила с action=ALLOW не могут "отменить" BLOCK/ASK — они нужны
+#  только для явной разметки в логах. Пропуск по умолчанию задаётся ниже
+#  через default_action.
+# =============================================================================
+
+version: 1
+
+# Действие, если не сработало ни одно правило: ALLOW | ASK | BLOCK
+default_action: ALLOW
+
+logging:
+  # true  — отправлять на сервер ВСЕ команды (в т.ч. разрешённые);
+  # false — только события с ASK/BLOCK.
+  send_all: true
+
+server:
+  url: "https://codingshield.ru/api/events"
+  timeout: 3.0          # секунд на один HTTP-запрос
+  retries: 2            # количество повторов при 5xx / сетевых ошибках
+  api_key: ""           # можно переопределить через CODINGSHIELD_API_KEY
+
+project:
+  id: "local-dev"       # переопределяется через CODINGSHIELD_PROJECT_ID
+  agent: "Claude Code"  # переопределяется через CODINGSHIELD_AGENT
+
+rules:
+
+  # ---------------------------------------------------------------- ФС / удаление
+  - id: rm-rf-critical
+    description: "Рекурсивное удаление корня, ~, $HOME или глобом"
+    pattern: '\brm\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*[rf][a-zA-Z]*\s+(?:/\s*$|/\*|~/?\s*$|\$HOME\b|\*\s*$)'
+    action: BLOCK
+
+  - id: rm-recursive
+    description: "Любое рекурсивное удаление (требует подтверждения)"
+    pattern: '\brm\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*[rf][a-zA-Z]*\s+\S'
+    action: ASK
+
+  - id: sudo-destructive
+    description: "sudo с потенциально разрушительными утилитами"
+    pattern: '\bsudo\s+(?:rm|dd|mkfs|chmod|chown|mv)\b'
+    action: ASK
+
+  - id: disk-write
+    description: "Прямая запись в блочное устройство"
+    pattern: '\bdd\b[^\n]*\bof=/dev/(?:sd|nvme|hd|vd)|>\s*/dev/(?:sd|nvme|hd|vd)'
+    action: BLOCK
+
+  - id: mkfs
+    description: "Форматирование файловой системы"
+    pattern: '\b(?:mkfs(?:\.\w+)?|wipefs)\b'
+    action: BLOCK
+
+  # ---------------------------------------------------------------- SQL
+  - id: sql-destructive
+    description: "Разрушительные DDL/DML операции"
+    pattern: '\b(?:drop\s+(?:table|database|schema)|truncate\s+table)\b'
+    action: BLOCK
+    flags: [IGNORECASE]
+
+  # ---------------------------------------------------------------- Git
+  - id: git-force-push
+    description: "Force-push (кроме --force-with-lease)"
+    pattern: '\bgit\s+push\b[^\n]*(?:--force\b(?!-with-lease)|\s-f\b)'
+    action: ASK
+
+  - id: git-reset-hard
+    description: "git reset --hard — потеря незакоммиченных изменений"
+    pattern: '\bgit\s+reset\s+--hard\b'
+    action: ASK
+
+  - id: git-clean-force
+    description: "git clean -f — удаление untracked-файлов"
+    pattern: '\bgit\s+clean\b[^\n]*\s-[a-zA-Z]*f'
+    action: ASK
+
+  - id: git-no-verify
+    description: "Обход git-хуков (--no-verify)"
+    pattern: '\bgit\s+commit\b[^\n]*--no-verify\b'
+    action: ASK
+
+  # ---------------------------------------------------------------- RCE / сеть
+  - id: pipe-to-shell
+    description: "Скачивание и исполнение скрипта из интернета (curl|sh)"
+    pattern: '\b(?:curl|wget)\b[^|;\n]*\|\s*(?:sudo\s+)?(?:ba|z|k)?sh\b'
+    action: BLOCK
+    flags: [IGNORECASE]
+
+  - id: fork-bomb
+    description: "Fork bomb"
+    pattern: ':\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:'
+    action: BLOCK
+
+  # ---------------------------------------------------------------- Система
+  - id: system-shutdown
+    description: "Выключение / перезагрузка хоста"
+    pattern: '\b(?:shutdown|reboot|poweroff|halt)\b'
+    action: BLOCK
+
+  - id: kill-init
+    description: "Убийство PID 1 / всех процессов"
+    pattern: '\bkill\s+-9\s+(?:1|-1)\b|\bkillall5\b'
+    action: BLOCK
+
+  # ---------------------------------------------------------------- Утечки
+  - id: read-env-file
+    description: "Чтение .env-файлов (возможная утечка секретов)"
+    pattern: '\b(?:cat|less|more|head|tail)\b[^|;\n]*\.env\b'
+    action: ASK
+
+  # ---------------------------------------------------------------- Права
+  - id: chmod-777
+    description: "chmod 777 — небезопасные права доступа"
+    pattern: '\bchmod\s+(?:-R\s+)?777\b'
+    action: ASK
+
+  # ---------------------------------------------------------------- Публикация
+  - id: package-publish
+    description: "Публикация пакета в реестр"
+    pattern: '\b(?:npm|yarn|pnpm)\s+publish\b|\btwine\s+upload\b'
+    action: ASK
